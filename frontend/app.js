@@ -736,7 +736,7 @@ async function fetchAndRenderStats() {
     </div>`;
 
   try {
-    const res  = await fetch('/api/stats');
+    const res  = await fetch(`${API_BASE}/api/stats`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -941,7 +941,7 @@ $authForm.addEventListener('submit', async (e) => {
   $authBtnSpinner.style.display = 'block';
   $authError.style.display     = 'none';
 
-  const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+  const endpoint = authMode === 'login' ? `${API_BASE}/api/auth/login` : `${API_BASE}/api/auth/register`;
 
   try {
     const resp = await fetch(endpoint, {
@@ -987,7 +987,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Try to verify existing token
   if (authToken) {
     try {
-      const resp = await fetch('/api/auth/verify', {
+      const resp = await fetch(`${API_BASE}/api/auth/verify`, {
         headers: authHeaders(),
       });
       if (resp.ok) {
