@@ -6,7 +6,7 @@
 'use strict';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const API_BASE = 'https://medrag-api-abc123-uc.a.run.app';
+const API_BASE = 'https://medrag-api-768669600860.asia-south1.run.app';
 const STEP_DELAY = 600;  // ms between thinking step animations
 
 // ── State ─────────────────────────────────────────────────────────────────────

@@ -109,7 +109,7 @@ app = FastAPI(
 
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
-    "https://Sidhanth-Mandal.github.io"  # fallback for dev
+    "https://sidhanth-mandal.github.io,http://localhost:8000,http://127.0.0.1:8000"  # fallback for dev
 ).split(",")
 
 app.add_middleware(
