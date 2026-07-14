@@ -1,0 +1,74 @@
+﻿name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'frontend/**'       # skip if only frontend changed
+      - '**.md'
+  workflow_dispatch:        # allows manual trigger from Actions tab
+
+env:
+  PROJECT_ID: agentic-project-502312
+  REGION: asia-south1
+  SERVICE_NAME: medrag-api          # Cloud Run service name (change if different)
+  IMAGE: asia-south1-docker.pkg.dev/agentic-project-502312/medrag-api/backend
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy to Cloud Run
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write       # required for Workload Identity Federation
+
+    steps:
+      # ── 1. Checkout source ──────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Authenticate to Google Cloud via Workload Identity ───
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      # ── 3. Set up gcloud CLI ────────────────────────────────────
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # ── 4. Configure Docker to use Artifact Registry ────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # ── 5. Build the Docker image ───────────────────────────────
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag ${{ env.IMAGE }}:${{ github.sha }} \
+            --tag ${{ env.IMAGE }}:latest \
+            .
+
+      # ── 6. Push image to Artifact Registry ──────────────────────
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker push ${{ env.IMAGE }}:latest
+
+      # ── 7. Deploy to Cloud Run ───────────────────────────────────
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+          flags: --allow-unauthenticated
+
+      # ── 8. Print the deployed URL ────────────────────────────────
+      - name: Show deployed URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.url }}"

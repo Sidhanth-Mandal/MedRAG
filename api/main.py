@@ -107,17 +107,24 @@ app = FastAPI(
     version="1.0.0",
 )
 
-ALLOWED_ORIGINS = os.environ.get(
+_raw_origins = os.environ.get(
     "ALLOWED_ORIGINS",
-    "https://sidhanth-mandal.github.io,http://localhost:8000,http://127.0.0.1:8000"  # fallback for dev
-).split(",")
+    "https://sidhanth-mandal.github.io,http://localhost:8000,http://127.0.0.1:8000"
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+import logging
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger(__name__)
+_log.info("CORS allow_origins: %s", ALLOWED_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    max_age=3600,
 )
 
 # Not Necessaru now as frontent is now on github Pages
