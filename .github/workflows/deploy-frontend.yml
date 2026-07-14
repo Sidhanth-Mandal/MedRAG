@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
+  workflow_dispatch:  # allows manual trigger from Actions tab
 
 permissions:
   contents: read
