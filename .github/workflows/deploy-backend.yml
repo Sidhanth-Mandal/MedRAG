@@ -12,7 +12,7 @@ env:
   PROJECT_ID: agentic-project-502312
   REGION: asia-south1
   SERVICE_NAME: medrag-api          # Cloud Run service name (change if different)
-  IMAGE: asia-south1-docker.pkg.dev/agentic-project-502312/medrag-api/backend
+  IMAGE: asia-south1-docker.pkg.dev/agentic-project-502312/med-rag/medrag-api
 
 jobs:
   build-and-deploy:
