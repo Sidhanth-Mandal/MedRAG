@@ -56,7 +56,6 @@ def router_node(state: AgentState) -> dict:
     except Exception:
         route = "both"
 
-    return {
-        "route":        route,
-        "search_query": query,   # initial search query = original query
-    }
+    # Note: search_query is set by query_rewriter_node (runs after this node).
+    return {"route": route}
+

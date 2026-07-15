@@ -1,4 +1,4 @@
-﻿name: Deploy Backend to Cloud Run
+name: Deploy Backend to Cloud Run
 
 on:
   push:
@@ -72,3 +72,47 @@ jobs:
       # ── 8. Print the deployed URL ────────────────────────────────
       - name: Show deployed URL
         run: echo "Deployed to ${{ steps.deploy.outputs.url }}"
+
+      # # ── 9. Clean up old images in Artifact Registry ──────────────
+      # # Keeps the 3 most recent images; deletes everything older.
+      # - name: Delete old images from Artifact Registry
+      #   run: |
+      #     # List all digests sorted oldest-first, skip the 3 newest, delete the rest
+      #     OLD_IMAGES=$(gcloud artifacts docker images list ${{ env.IMAGE }} \
+      #       --include-tags \
+      #       --sort-by="~UPDATE_TIME" \
+      #       --format="get(DIGEST)" \
+      #       | tail -n +4)
+
+      #     if [ -z "$OLD_IMAGES" ]; then
+      #       echo "No old images to delete."
+      #     else
+      #       for digest in $OLD_IMAGES; do
+      #         echo "Deleting ${{ env.IMAGE }}@$digest"
+      #         gcloud artifacts docker images delete \
+      #           "${{ env.IMAGE }}@$digest" \
+      #           --quiet --delete-tags
+      #       done
+      #     fi
+
+      # # ── 10. Clean up old Cloud Run revisions ─────────────────────
+      # # Keeps the 3 most recent revisions; deletes older inactive ones.
+      # - name: Delete old Cloud Run revisions
+      #   run: |
+      #     OLD_REVISIONS=$(gcloud run revisions list \
+      #       --service=${{ env.SERVICE_NAME }} \
+      #       --region=${{ env.REGION }} \
+      #       --sort-by="~DEPLOYED" \
+      #       --format="value(name)" \
+      #       | tail -n +4)
+
+      #     if [ -z "$OLD_REVISIONS" ]; then
+      #       echo "No old revisions to delete."
+      #     else
+      #       for rev in $OLD_REVISIONS; do
+      #         echo "Deleting revision $rev"
+      #         gcloud run revisions delete "$rev" \
+      #           --region=${{ env.REGION }} \
+      #           --quiet
+      #       done
+      #     fi

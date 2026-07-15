@@ -20,12 +20,20 @@ class AgentState(TypedDict):
     # ── Chat history (managed by LangGraph add_messages) ─
     messages:        Annotated[list, add_messages]
 
+    # ── Context awareness ────────────────────────────────
+    chat_summary:    str          # Rolling LLM summary of older history (from DB)
+    history_context: str          # Formatted string of summary + recent msgs for prompts
+
+    # ── Retrieval gating ─────────────────────────────────
+    needs_rag:       bool         # False → skip RAG, use direct_answer path
+
     # ── Routing ─────────────────────────────────────────
     route:           str          # 'research' | 'guideline' | 'both'
 
     # ── Retrieval ────────────────────────────────────────
     retrieved_docs:  list[dict[str, Any]]   # Top chunks after reranking
-    search_query:    str          # Possibly rewritten query used for retrieval
+    search_query:    str          # Primary search query (for grader retry rewriting)
+    search_queries:  list[str]    # All sub-queries from query_rewriter (1 = single, 2-3 = multi)
 
     # ── Grading / retry ──────────────────────────────────
     rewrite_count:   int          # 0, 1, or 2 — how many rewrites attempted

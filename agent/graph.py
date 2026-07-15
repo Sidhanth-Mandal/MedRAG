@@ -6,10 +6,13 @@ conditional edges. Compiles with a Supabase/PostgreSQL
 checkpointer for persistent chat history across sessions.
 
 Graph flow:
-  safety → (safe?) → router → retrieve → grade
-  grade → (relevant?) → contradiction → answer → END
-  grade → (retry?)    → retrieve  [max 2 retries]
-  safety → (unsafe?) → END  [with refuse answer already set]
+  summarize → intake → (CHAT?) → direct_answer → END
+                     → (RAG?)  → safety → (unsafe?) → END
+                                        → (safe?)   → router → query_rewrite
+                                                             → (single?) → retrieve
+                                                             → (multi?)  → multi_retrieve
+                                                                    ↕ grade retry loop
+                                          contradiction → answer → END
 """
 
 from __future__ import annotations
@@ -17,18 +20,24 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.state import AgentState
-from agent.nodes.safety      import safety_node
-from agent.nodes.router      import router_node
-from agent.nodes.retriever   import retriever_node
-from agent.nodes.grader      import grader_node
+from agent.nodes.summarizer    import summarizer_node
+from agent.nodes.intake        import intake_node
+from agent.nodes.safety        import safety_node
+from agent.nodes.router        import router_node
+from agent.nodes.query_rewriter import query_rewriter_node
+from agent.nodes.retriever     import retriever_node
+from agent.nodes.multi_retriever import multi_retriever_node
+from agent.nodes.grader        import grader_node
 from agent.nodes.contradiction import contradiction_node
-from agent.nodes.answer      import answer_node
+from agent.nodes.answer        import answer_node
+from agent.nodes.direct_answer import direct_answer_node
 from config import cfg
 
 load_dotenv()
@@ -36,11 +45,22 @@ load_dotenv()
 
 # ── Conditional edge functions ────────────────────────────────────────────────
 
+def after_intake(state: AgentState) -> str:
+    """Route after intake: skip RAG for conversational turns."""
+    return "rag" if state.get("needs_rag", True) else "conversational"
+
+
 def after_safety(state: AgentState) -> str:
     """Route after safety check."""
     if not state.get("is_safe", True):
         return "refused"
     return "safe"
+
+
+def after_query_rewrite(state: AgentState) -> str:
+    """Route after query rewriting: single query → retrieve, multi → multi_retrieve."""
+    queries = state.get("search_queries", [])
+    return "multi" if len(queries) > 1 else "single"
 
 
 def after_grade(state: AgentState) -> str:
@@ -68,18 +88,39 @@ def build_graph(checkpointer=None):
     """
     builder = StateGraph(AgentState)
 
-    # Register nodes
-    builder.add_node("safety",       safety_node)
-    builder.add_node("router",       router_node)
-    builder.add_node("retrieve",     retriever_node)
-    builder.add_node("grade",        grader_node)
-    builder.add_node("contradiction", contradiction_node)
-    builder.add_node("answer",       answer_node)
+    # Register all nodes
+    builder.add_node("summarize",      summarizer_node)
+    builder.add_node("intake",         intake_node)
+    builder.add_node("direct_answer",  direct_answer_node)
+    builder.add_node("safety",         safety_node)
+    builder.add_node("router",         router_node)
+    builder.add_node("query_rewrite",  query_rewriter_node)
+    builder.add_node("retrieve",       retriever_node)
+    builder.add_node("multi_retrieve", multi_retriever_node)
+    builder.add_node("grade",          grader_node)
+    builder.add_node("contradiction",  contradiction_node)
+    builder.add_node("answer",         answer_node)
 
     # Entry point
-    builder.set_entry_point("safety")
+    builder.set_entry_point("summarize")
 
-    # Safety → router OR END
+    # summarize → intake (always)
+    builder.add_edge("summarize", "intake")
+
+    # intake → direct_answer OR safety (RAG path)
+    builder.add_conditional_edges(
+        "intake",
+        after_intake,
+        {
+            "conversational": "direct_answer",
+            "rag":            "safety",
+        },
+    )
+
+    # Conversational fast-path → END
+    builder.add_edge("direct_answer", END)
+
+    # Safety → router OR END (refused)
     builder.add_conditional_edges(
         "safety",
         after_safety,
@@ -89,18 +130,29 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # Router → retrieve (always)
-    builder.add_edge("router", "retrieve")
+    # Router → query_rewrite (always)
+    builder.add_edge("router", "query_rewrite")
 
-    # Retrieve → grade (always)
-    builder.add_edge("retrieve", "grade")
+    # query_rewrite → single retrieve OR multi_retrieve
+    builder.add_conditional_edges(
+        "query_rewrite",
+        after_query_rewrite,
+        {
+            "single": "retrieve",
+            "multi":  "multi_retrieve",
+        },
+    )
+
+    # Both retrieval paths → grade
+    builder.add_edge("retrieve",       "grade")
+    builder.add_edge("multi_retrieve", "grade")
 
     # Grade → retry retrieve OR proceed to contradiction
     builder.add_conditional_edges(
         "grade",
         after_grade,
         {
-            "retry":   "retrieve",
+            "retry":   "retrieve",   # retry uses single retriever with rewritten search_query
             "proceed": "contradiction",
         },
     )
@@ -157,6 +209,48 @@ def get_postgres_checkpointer():
         return None
 
 
+# ── History context builder ───────────────────────────────────────────────────
+
+def _build_history_context(session_id: str) -> tuple[str, str]:
+    """
+    Build the history_context string to inject into agent prompts.
+
+    Returns (chat_summary, history_context) where:
+      - chat_summary: the stored rolling summary (or "")
+      - history_context: formatted string of summary + recent raw messages
+
+    Strategy:
+      - If a summary exists (history was long enough to trigger summarization):
+          Use summary + last 4 raw messages
+      - Otherwise:
+          Use last 6 raw messages only
+    """
+    try:
+        import api.db as db
+        summary       = db.get_summary(session_id)
+        recent_limit  = 4 if summary else 6
+        recent_msgs   = db.get_recent_history(session_id, limit=recent_limit)
+    except Exception as exc:
+        print(f"[WARN] _build_history_context failed: {exc}")
+        return "", ""
+
+    parts: list[str] = []
+
+    if summary:
+        parts.append(f"[Summary of earlier conversation]\n{summary}")
+
+    if recent_msgs:
+        lines = []
+        for msg in recent_msgs:
+            role    = "User" if msg["role"] == "human" else "Assistant"
+            content = msg["content"][:400]
+            lines.append(f"{role}: {content}")
+        parts.append("[Recent messages]\n" + "\n".join(lines))
+
+    history_context = "\n\n".join(parts) if parts else ""
+    return summary or "", history_context
+
+
 # ── Convenience: invoke with session ─────────────────────────────────────────
 
 def run_agent(
@@ -183,22 +277,27 @@ def run_agent(
 
     config = {"configurable": {"thread_id": session_id}}
 
+    # Build history context from Postgres before the graph runs
+    chat_summary, history_context = _build_history_context(session_id)
+
     # IMPORTANT: Only pass the fresh query fields here.
     # LangGraph merges this initial_state with any stored checkpoint for the
-    # thread_id.  Passing stale-reset values (empty lists, False booleans, etc.)
-    # would overwrite the checkpointer's memory of the current turn AND, without
-    # a checkpointer, would leak state between different sessions sharing the
-    # same in-process graph instance.
-    # Non-message fields that must be fresh for every turn are reset here;
-    # retrieved_docs / answer / citations are produced by the graph nodes so
-    # they must also be reset to avoid a previous run's values bleeding through.
-    initial_state = {
+    # thread_id.  Non-message fields that must be fresh for every turn are
+    # reset here; retrieved_docs / answer / citations are produced by the graph
+    # nodes so they must also be reset to avoid a previous run's values
+    # bleeding through.
+    initial_state: dict[str, Any] = {
         # ── Per-turn inputs (always fresh) ──────────────────────────
         "query":                 query,
         "session_id":            session_id,
-        "search_query":          query,   # may be rewritten by grader
+        # ── Context (built from DB before graph runs) ────────────────
+        "chat_summary":          chat_summary,
+        "history_context":       history_context,
         # ── Per-turn outputs (reset so previous run can't bleed in) ─
+        "needs_rag":             True,
         "route":                 "both",
+        "search_query":          query,   # fallback; query_rewriter overwrites this
+        "search_queries":        [],
         "retrieved_docs":        [],
         "rewrite_count":         0,
         "docs_relevant":         False,

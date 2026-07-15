@@ -25,7 +25,8 @@ _ANSWER_PROMPT = """
 You are a medical information assistant. Answer the question using ONLY
 the provided sources. Do not use any external knowledge.
 
-Question: {query}
+{history_section}
+Current question: {query}
 
 Sources:
 {sources_text}
@@ -36,6 +37,7 @@ Instructions:
 3. Do not make claims not supported by the sources.
 4. Keep the answer focused and under 300 words.
 5. If the sources mention limitations or uncertainty, include that.
+6. If the current question is a follow-up, use the conversation context above to understand what it refers to.
 {conflict_instruction}
 
 Answer:
@@ -82,10 +84,20 @@ def _build_citations(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def answer_node(state: AgentState) -> dict:
     """Generate the final answer with inline citations."""
-    query  = state["query"]
-    docs   = state.get("retrieved_docs", [])
-    has_conflict      = state.get("has_contradiction", False)
-    conflict_details  = state.get("contradiction_details", "")
+    query            = state["query"]
+    docs             = state.get("retrieved_docs", [])
+    has_conflict     = state.get("has_contradiction", False)
+    conflict_details = state.get("contradiction_details", "")
+    history_context  = state.get("history_context", "")
+
+    # Build the history section if we have prior context
+    if history_context:
+        history_section = (
+            "Conversation context (prior turns):\n"
+            f"{history_context}\n"
+        )
+    else:
+        history_section = ""
 
     if not docs:
         return {
@@ -106,6 +118,7 @@ def answer_node(state: AgentState) -> dict:
         query=query,
         sources_text=sources_text,
         conflict_instruction=conflict_instruction,
+        history_section=history_section,
     )
 
     llm    = get_llm()
@@ -125,3 +138,4 @@ def answer_node(state: AgentState) -> dict:
         "citations": citations,
         "messages":  new_messages,
     }
+

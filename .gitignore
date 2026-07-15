@@ -32,3 +32,8 @@ env/
 # ── OS ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── Local testing (never commit) ─────────────────────────────
+test.py
+testapikey.py
+testchatresponse.py

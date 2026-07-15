@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
     ON chat_messages (session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS session_summaries (
+    session_id  TEXT        PRIMARY KEY,
+    summary     TEXT        NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 # Migration: add user_id to existing tables, then add its index
@@ -289,7 +295,7 @@ def list_sessions(user_id: int | None = None) -> list[dict[str, Any]]:
 
 
 def delete_session(session_id: str) -> None:
-    """Hard-delete all messages for a session."""
+    """Hard-delete all messages and summary for a session."""
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -297,5 +303,95 @@ def delete_session(session_id: str) -> None:
                 "DELETE FROM chat_messages WHERE session_id = %s",
                 (session_id,),
             )
+            cur.execute(
+                "DELETE FROM session_summaries WHERE session_id = %s",
+                (session_id,),
+            )
     except Exception as exc:
         print(f"[WARN] Could not delete session from DB: {exc}")
+
+
+# ── Summary helpers ───────────────────────────────────────────────────────────
+
+def get_summary(session_id: str) -> str:
+    """
+    Return the stored rolling summary for a session, or empty string if none.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT summary FROM session_summaries WHERE session_id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            return dict(row)["summary"] if row else ""
+    except Exception as exc:
+        print(f"[WARN] get_summary failed: {exc}")
+        return ""
+
+
+def save_summary(session_id: str, summary_text: str) -> None:
+    """
+    Upsert the rolling summary for a session.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO session_summaries (session_id, summary, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (session_id)
+                DO UPDATE SET summary = EXCLUDED.summary, updated_at = now()
+                """,
+                (session_id, summary_text),
+            )
+    except Exception as exc:
+        print(f"[WARN] save_summary failed: {exc}")
+
+
+def get_recent_history(session_id: str, limit: int = 6) -> list[dict[str, Any]]:
+    """
+    Return the last `limit` messages for a session (oldest-first order),
+    with only role + content — enough to build history context.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT role, content
+                FROM (
+                    SELECT role, content, created_at
+                    FROM   chat_messages
+                    WHERE  session_id = %s
+                    ORDER  BY created_at DESC
+                    LIMIT  %s
+                ) sub
+                ORDER BY created_at ASC
+                """,
+                (session_id, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        print(f"[WARN] get_recent_history failed: {exc}")
+        return []
+
+
+def count_messages(session_id: str) -> int:
+    """
+    Return the total number of messages stored for a session.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM chat_messages WHERE session_id = %s",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            return int(dict(row)["cnt"]) if row else 0
+    except Exception as exc:
+        print(f"[WARN] count_messages failed: {exc}")
+        return 0

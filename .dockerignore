@@ -10,3 +10,6 @@ data/raw/
 frontend/
 eval/
 .vscode/
+test.py
+testapikey.py
+testchatresponse.py
