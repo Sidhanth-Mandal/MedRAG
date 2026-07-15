@@ -7,7 +7,7 @@
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const API_BASE = 'https://medrag-api-768669600860.asia-south1.run.app';
-const STEP_DELAY = 600;  // ms between thinking step animations
+const STEP_DELAY = 700;  // ms between thinking step animations
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentSessionId   = null;
@@ -39,21 +39,12 @@ const $citationPanel  = document.getElementById('citationPanel');
 const $panelBody      = document.getElementById('citationPanelBody');
 const $closePanelBtn  = document.getElementById('closePanelBtn');
 const $panelOverlay   = document.getElementById('panelOverlay');
-const $thinkingOverlay = document.getElementById('thinkingOverlay');
+// (thinkingSteps now rendered dynamically inside the inline bubble)
 const $topbarTitle    = document.getElementById('topbarTitle');
 const $routeBadge     = document.getElementById('routeBadge');
 const $sidebar        = document.getElementById('sidebar');
 const $sidebarOverlay = document.getElementById('sidebarOverlay');
 const $menuBtn        = document.getElementById('menuBtn');
-
-// Thinking step elements
-const thinkingSteps = {
-  safety:   document.getElementById('step-safety'),
-  route:    document.getElementById('step-route'),
-  retrieve: document.getElementById('step-retrieve'),
-  grade:    document.getElementById('step-grade'),
-  answer:   document.getElementById('step-answer'),
-};
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -256,32 +247,93 @@ function appendHumanMessage(text) {
   return group;
 }
 
-function appendTypingIndicator() {
-  const group = document.createElement('div');
-  group.className = 'message-group';
-  group.id = 'typingIndicator';
-  group.innerHTML = `
-    <div class="message-ai">
-      <div class="message-ai-header">
-        <div class="ai-avatar">M</div>
-        <span class="ai-label">MedRAG</span>
-      </div>
-      <div class="typing-indicator">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-      </div>
+// ── Thinking bubble (Gemini / ChatGPT-style) ──────────────────────────────────
+
+const THINKING_STEPS_CONFIG = [
+  { key: 'safety',   label: 'Checking safety' },
+  { key: 'route',    label: 'Routing query' },
+  { key: 'retrieve', label: 'Retrieving evidence' },
+  { key: 'grade',    label: 'Grading relevance' },
+  { key: 'answer',   label: 'Generating answer' },
+];
+
+let _thinkingStepInterval = null;
+
+/**
+ * Injects the inline Gemini-style thinking bubble into the message list.
+ * Replaces the old appendTypingIndicator + showThinking combo.
+ */
+function appendThinkingBubble() {
+  const wrap = document.createElement('div');
+  wrap.id        = 'typingIndicator';
+  wrap.className = 'thinking-bubble-wrap';
+
+  // Build step rows HTML
+  const stepsHTML = THINKING_STEPS_CONFIG.map((s, i) =>
+    `<div class="ts-step ${i === 0 ? 'ts-active' : 'ts-pending'}" id="tbs-${s.key}">
+       <span class="ts-icon"></span>
+       <span>${s.label}</span>
+     </div>`
+  ).join('');
+
+  wrap.innerHTML = `
+    <div class="message-ai-header thinking-header" id="thinkingHeader">
+      <div class="ai-avatar">M</div>
+      <span class="ai-label">MedRAG</span>
+      <span class="thinking-label">Thinking</span>
+      <span class="thinking-dots">
+        <span class="thinking-dot-pulse"></span>
+        <span class="thinking-dot-pulse"></span>
+        <span class="thinking-dot-pulse"></span>
+      </span>
+      <span class="thinking-chevron">▾</span>
+    </div>
+    <div class="thinking-steps-list" id="thinkingStepsList">
+      ${stepsHTML}
     </div>
   `;
-  $messages.appendChild(group);
+
+  $messages.appendChild(wrap);
   scrollToBottom();
-  return group;
+
+  // Toggle expand/collapse on click
+  wrap.querySelector('#thinkingHeader').addEventListener('click', () => {
+    wrap.classList.toggle('expanded');
+    scrollToBottom();
+  });
+
+  // Animate through steps
+  let current = 0;
+  _thinkingStepInterval = setInterval(() => {
+    const stepEl = document.getElementById(`tbs-${THINKING_STEPS_CONFIG[current].key}`);
+    if (stepEl) stepEl.className = 'ts-step ts-done';
+    current++;
+    if (current < THINKING_STEPS_CONFIG.length) {
+      const nextEl = document.getElementById(`tbs-${THINKING_STEPS_CONFIG[current].key}`);
+      if (nextEl) nextEl.className = 'ts-step ts-active';
+    } else {
+      clearInterval(_thinkingStepInterval);
+    }
+  }, STEP_DELAY);
+
+  return wrap;
 }
 
-function removeTypingIndicator() {
+function removeThinkingBubble() {
+  if (_thinkingStepInterval) {
+    clearInterval(_thinkingStepInterval);
+    _thinkingStepInterval = null;
+  }
   const el = document.getElementById('typingIndicator');
   if (el) el.remove();
 }
+
+// Legacy aliases kept for call-site compatibility
+function appendTypingIndicator() { return appendThinkingBubble(); }
+function removeTypingIndicator() { return removeThinkingBubble(); }
+function showThinking()  { /* now handled inline by appendThinkingBubble */ }
+function hideThinking()  { removeThinkingBubble(); }
+
 
 function appendAIMessage(responseData) {
   const {
@@ -457,45 +509,8 @@ function highlightCitation(n) {
   }, 100);
 }
 
-// ── Thinking overlay ──────────────────────────────────────────────────────────
+// ── Thinking overlay (now handled inline — see appendThinkingBubble above) ─────
 
-async function runThinkingAnimation() {
-  const steps = ['safety', 'route', 'retrieve', 'grade', 'answer'];
-  let current = 0;
-
-  // Reset all steps
-  steps.forEach(s => {
-    thinkingSteps[s].className = 'thinking-step';
-  });
-
-  // Activate first step immediately
-  thinkingSteps[steps[0]].classList.add('active');
-
-  // Animate through steps
-  return new Promise(resolve => {
-    const interval = setInterval(() => {
-      // Mark current as done
-      thinkingSteps[steps[current]].className = 'thinking-step done';
-      current++;
-
-      if (current < steps.length) {
-        thinkingSteps[steps[current]].classList.add('active');
-      } else {
-        clearInterval(interval);
-        resolve();
-      }
-    }, STEP_DELAY);
-  });
-}
-
-function showThinking() {
-  $thinkingOverlay.style.display = 'flex';
-  runThinkingAnimation();
-}
-
-function hideThinking() {
-  $thinkingOverlay.style.display = 'none';
-}
 
 // ── API calls ─────────────────────────────────────────────────────────────────
 
