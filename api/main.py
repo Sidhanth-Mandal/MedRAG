@@ -32,7 +32,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # from fastapi.staticfiles import StaticFiles
 # from fastapi.responses import FileResponse
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError as JWTError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 load_dotenv()
