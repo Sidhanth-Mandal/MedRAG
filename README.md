@@ -213,7 +213,7 @@ cp .env.example .env
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/<your-username>/<your-repo>.git
+git clone https://github.com/Sidhanth-Mandal/MedRAG.git
 cd "Agentic RAG"
 
 # 2. Create and activate a virtual environment
