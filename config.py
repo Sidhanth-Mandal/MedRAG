@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 @dataclass
 class LLMConfig:
     # Primary chat model used for routing, grading, answer generation
-    model: str = "llama-3.3-70b-versatile"
+    model: str = "openai/gpt-oss-120b"
 
     # Fallback model if primary hits rate limits (optional — same rotation keys)
     fallback_model: str = "llama-3.1-8b-instant"
